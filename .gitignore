@@ -9,6 +9,10 @@ npm-debug.log*
 # env files
 .env
 
+# uploaded files
+uploads/*
+!uploads/.gitkeep
+
 # build output
 dist/
 build/

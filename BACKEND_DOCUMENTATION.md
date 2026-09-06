@@ -64,6 +64,7 @@ Important:
 - `JWT_SECRET` is used to sign and verify JWTs.
 - `MONGO_URI` connects the app to MongoDB.
 - `PORT` is the server port.
+- S3 environment variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_BUCKET_NAME` were removed for the local upload setup.
 
 ## 5. Database Connection
 
