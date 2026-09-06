@@ -2,6 +2,7 @@ const router = require("express").Router();
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 const upload = require("../middleware/upload");
+const { createAdmin } = require("../controllers/authController");
 const {
   createProduct,
   updateProduct,
@@ -15,6 +16,8 @@ const {
   updateOffer,
   deleteOffer
 } = require("../controllers/offerController");
+
+router.post("/create", createAdmin);
 
 router.post("/products", auth, admin, upload.single("image"), createProduct);
 router.put("/products/:id", auth, admin, upload.single("image"), updateProduct);
