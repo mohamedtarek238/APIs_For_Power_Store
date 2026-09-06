@@ -1,6 +1,13 @@
 # Backend Documentation
 
-This project is a Node.js + Express backend for a simple e-commerce or product/order management API. It uses MongoDB with Mongoose for persistence and JWT-based authentication to protect user and admin routes.
+This project is a simplified Node.js + Express + MongoDB backend for a guest-based e-commerce API.
+
+The system has only two user types:
+
+- Guest Customer: no account, no login, no JWT, can browse products, add to cart, and place guest orders
+- Admin: login with JWT, manages products, orders, and offers
+
+JWT authentication is used only for admin functionality.
 
 ## 1. Stack and Tools
 
@@ -11,20 +18,21 @@ This project is a Node.js + Express backend for a simple e-commerce or product/o
 - bcryptjs for password hashing
 - dotenv for environment handling
 - nodemon for local development
+- multer for local image uploads
 
 ## 2. Project Overview
 
 The backend exposes REST API endpoints for:
 
-- user registration and login
-- viewing products
-- creating customer orders
-- viewing a user’s own orders
-- managing promotional offers
-- validating and applying offers to orders
+- public product browsing
+- public offer listing and validation
+- guest order placement
+- admin login
 - admin-only product management
-- admin-only order status management
+- admin-only order management
 - admin-only offer management
+
+There are no customer accounts, no customer login, and no customer dashboard.
 
 ## 3. Main Entry Point
 
@@ -44,8 +52,8 @@ Key behavior:
 - `server.js`
   - starts Express app
   - connects DB
-  - registers routes
-  - mounts `/api/offers` public offer routes
+  - serves the `uploads/` folder publicly under `/uploads`
+  - registers public routes for products, offers, and guest orders
   - mounts `/api/admin` admin-only routes
   - listens on configured port
 
@@ -94,6 +102,8 @@ Behavior:
 
 - password is automatically hashed before save using `bcryptjs`
 - only hashes when the password field is modified
+- kept only for admin authentication
+- no customer users are created in this simplified architecture
 
 ### Product Model (`models/Product.js`)
 
@@ -128,13 +138,14 @@ Fields:
 
 Fields:
 
-- `user` → reference to `User`
+- `user` → optional legacy reference to `User` for compatibility; not required for guest orders
+- `customerName` → guest customer name
 - `products` → array of objects with:
   - `product` → reference to `Product`
   - `quantity`
 - `offerCode` → optional applied promo code
 - `discountAmount` → total discount saved on the order
-- `totalPrice` → final price after discount
+- `totalPrice` → final server-calculated total after discount
 - `paymentMethod` (default: `Cash On Delivery`)
 - `status` (`pending`, `shipped`, `delivered`)
 - `address`
@@ -172,17 +183,20 @@ This checks whether the logged-in user has role `admin`.
 
 ### Auth Routes (`routes/authRoutes.js`)
 
-- `POST /api/auth/register`
-  - creates a new user
 - `POST /api/auth/login`
+  - admin-only login
   - verifies email/password
   - returns JWT token and user data
+
+Customer registration has been removed.
 
 ### Product Routes (`routes/productRoutes.js`)
 
 - `GET /api/products`
+  - public
   - returns active products only
 - `GET /api/products/:id`
+  - public
   - returns a single product by ID
 
 ### Offer Routes (`routes/offerRoutes.js`)
@@ -191,19 +205,19 @@ This checks whether the logged-in user has role `admin`.
   - public endpoint
   - returns currently valid offers
 - `POST /api/offers/validate`
-  - requires authentication
+  - public
   - validates a code against a provided `totalPrice`
   - returns discount amount and final price
 
 ### Order Routes (`routes/orderRoutes.js`)
 
 - `POST /api/orders`
-  - requires authentication
-  - creates an order for the logged-in user
-  - re-validates `offerCode` server-side before finalizing the order
-- `GET /api/orders/my`
-  - requires authentication
-  - returns all orders for the logged-in user
+  - public
+  - guest order placement
+  - server calculates final price using product data from MongoDB
+  - validates offerCode server-side before saving the order
+
+`GET /api/orders/my` has been removed because customers do not have accounts.
 
 ### Admin Routes (`routes/adminRoutes.js`)
 
@@ -239,19 +253,16 @@ This checks whether the logged-in user has role `admin`.
 
 ### Auth Controller (`controllers/authController.js`)
 
-#### `register`
-
-- creates a user from `req.body`
-- sends back the created user object
-
 #### `login`
 
-- finds user by email
+- finds admin by email
 - compares password using bcrypt
 - if valid, returns:
   - `token`
   - `user`
 - if not valid, returns `400` with `Invalid credentials`
+
+Customer registration is no longer part of the backend.
 
 ### Products Controller (`controllers/productsController.js`)
 
@@ -306,18 +317,18 @@ This checks whether the logged-in user has role `admin`.
 
 #### `createOrder`
 
-- creates an order using request body
-- automatically sets `user: req.user._id`
-- if `offerCode` is provided, it is re-validated server-side
-- applies discount to `totalPrice`
-- increments the associated offer’s `usedCount`
-- stores `offerCode` and `discountAmount` on the order
-- returns created order
+- receives a guest order from the public API
+- requires `customerName`, `phone`, `address`, and `products`
+- fetches products from MongoDB by ID
+- calculates the subtotal from the real product prices in the database
+- validates any provided `offerCode` server-side
+- computes the discount and final total on the server
+- increments the offer’s `usedCount`
+- stores `offerCode`, `discountAmount`, and the final `totalPrice`
+- creates the order without attaching a user account
+- returns the created order
 
-#### `myOrders`
-
-- gets all orders belonging to logged-in user
-- returns them as JSON
+There is no customer `myOrders` endpoint.
 
 ### Admin Controller (`controllers/adminController.js`)
 
@@ -347,28 +358,14 @@ This checks whether the logged-in user has role `admin`.
 
 ## 10. Request Flow Example
 
-### User registration
-
-```http
-POST /api/auth/register
-Content-Type: application/json
-
-{
-  "name": "Ahmed",
-  "email": "ahmed@example.com",
-  "password": "123456",
-  "role": "user"
-}
-```
-
-### User login
+### Admin login
 
 ```http
 POST /api/auth/login
 Content-Type: application/json
 
 {
-  "email": "ahmed@example.com",
+  "email": "admin@example.com",
   "password": "123456"
 }
 ```
@@ -380,36 +377,23 @@ Response example:
   "token": "jwt_token_here",
   "user": {
     "_id": "...",
-    "name": "Ahmed",
-    "email": "ahmed@example.com",
-    "role": "user"
+    "name": "Admin",
+    "email": "admin@example.com",
+    "role": "admin"
   }
 }
 ```
 
-### Create order with offer
+### Public product list
 
 ```http
-POST /api/orders
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "products": [
-    { "product": "product_id_here", "quantity": 2 }
-  ],
-  "totalPrice": 200,
-  "offerCode": "SAVE10",
-  "address": "Cairo",
-  "phone": "01000000000"
-}
+GET /api/products
 ```
 
-### Validate an offer
+### Public offer validation
 
 ```http
 POST /api/offers/validate
-Authorization: Bearer <token>
 Content-Type: application/json
 
 {
@@ -429,16 +413,36 @@ Response example:
 }
 ```
 
+### Guest checkout order
+
+```http
+POST /api/orders
+Content-Type: application/json
+
+{
+  "customerName": "Ahmed Ali",
+  "phone": "01012345678",
+  "address": "Cairo, Egypt",
+  "paymentMethod": "Cash On Delivery",
+  "products": [
+    { "product": "product_id_here", "quantity": 2 }
+  ],
+  "offerCode": "SAVE10"
+}
+```
+
+The backend calculates the final price from the product database and ignores any client-submitted total.
+
 ## 11. API Behavior Summary
 
-This backend follows a straightforward REST structure:
+This backend follows a simplified guest-commerce architecture:
 
-- public routes for auth and product listing
-- public offer endpoints for active offers and validation
-- protected routes for order operations
-- admin-only routes for product, order, and offer management
+- public product browsing
+- public offer listing and validation
+- public guest order placement
+- admin-only auth, product, order, and offer management
 
-It is designed for simple e-commerce use cases with basic authentication, role-based access, and promotion logic.
+There is no customer registration, no customer login, no JWT for customers, and no customer dashboard.
 
 ## 12. Security Notes
 
@@ -470,15 +474,16 @@ This uses `nodemon` to restart the server automatically during development.
 
 ## 14. Final Summary
 
-This backend is a lightweight full-stack-ready API for an e-commerce application. It includes:
+This backend is a simplified guest-order e-commerce API. It includes:
 
 - MongoDB integration
 - Mongoose schemas
-- JWT authentication
-- user/admin authorization flow
+- public product browsing
+- public offer validation
+- guest order creation without customer accounts
+- admin JWT authentication for management tasks
 - product management
-- order creation and tracking
-- promotional offer management
-- discount validation and final-price calculation
+- order and offer management by admin
+- server-side total calculation for secure pricing
 
-It is simple, readable, and easy to extend for larger use cases.
+It is intentionally minimal and keeps the architecture simple.
