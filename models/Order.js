@@ -8,6 +8,8 @@ const orderSchema = new mongoose.Schema({
       quantity: Number
     }
   ],
+  offerCode: String,
+  discountAmount: { type: Number, default: 0 },
   totalPrice: Number,
   paymentMethod: { type: String, default: "Cash On Delivery" },
   status: {

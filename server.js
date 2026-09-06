@@ -5,6 +5,7 @@ const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const productRoutes = require("./routes/productRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const offerRoutes = require("./routes/offerRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 
 connectDB();
@@ -19,6 +20,7 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/offers", offerRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.listen(process.env.PORT, () =>
