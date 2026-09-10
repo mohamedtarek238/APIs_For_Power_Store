@@ -122,8 +122,12 @@ Fields:
 
 - `code` → required, unique, uppercase string
 - `description`
+- `type` → `discount` or `bundle` (defaults to `discount`)
 - `discountType` → `percentage` or `fixed`
 - `discountValue` → numeric value used for the discount
+- `collectionName` → display name for a bundle collection
+- `requiredQuantity` → number of selected collection products required for one bundle
+- `bundlePrice` → price for one bundle
 - `minOrderAmount` → minimum order required to apply the offer
 - `maxDiscountAmount` → optional cap for percentage discounts
 - `applicableProducts` → array of Product references; empty means applies to all products
@@ -208,6 +212,7 @@ Customer registration has been removed.
   - public
   - validates a code against a provided `totalPrice`
   - returns discount amount and final price
+  - bundle offers also require a `products` array and calculate the bundle from database product prices
 
 ### Order Routes (`routes/orderRoutes.js`)
 
@@ -282,6 +287,7 @@ Customer registration is no longer part of the backend.
 
 - creates a new offer
 - validates required fields and discount type
+- supports bundle offers with `type: "bundle"`, `collectionName`, `applicableProducts`, `requiredQuantity`, and `bundlePrice`
 - rejects invalid start/end date ranges
 - prevents duplicate offer codes
 
@@ -311,6 +317,7 @@ Customer registration is no longer part of the backend.
 - verifies date validity and usage limit
 - checks minimum order amount
 - calculates discount amount and final price
+- for bundle offers, verifies that the cart contains enough products from the collection and applies the bundle price to each complete bundle
 - returns JSON with `valid`, `discountAmount`, and `finalPrice`
 
 ### Order Controller (`controllers/orderController.js`)
@@ -323,6 +330,7 @@ Customer registration is no longer part of the backend.
 - calculates the subtotal from the real product prices in the database
 - validates any provided `offerCode` server-side
 - computes the discount and final total on the server
+- supports bundle offers by applying the bundle price to any complete group of the required quantity from the selected collection products
 - increments the offer’s `usedCount`
 - stores `offerCode`, `discountAmount`, and the final `totalPrice`
 - creates the order without attaching a user account

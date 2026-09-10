@@ -1,4 +1,5 @@
 const Offer = require("../models/Offer");
+const Product = require("../models/Product");
 
 const normalizeCode = (code) => {
   return code ? code.toString().trim().toUpperCase() : "";
@@ -24,13 +25,70 @@ const calculateDiscount = (totalPrice, offer) => {
   return discountAmount;
 };
 
+const getBundlePricing = (products, mongoProducts, offer) => {
+  const requiredQuantity = Number(offer.requiredQuantity);
+  const bundlePrice = Number(offer.bundlePrice);
+  const applicableProductIds = new Set((offer.applicableProducts || []).map((id) => id.toString()));
+  const productMap = new Map(mongoProducts.map((product) => [product._id.toString(), product]));
+  const eligibleUnits = [];
+  let subtotal = 0;
+
+  for (const item of products) {
+    const product = productMap.get(item.product.toString());
+    const quantity = Number(item.quantity || 0);
+    if (!product || quantity <= 0) {
+      return { error: "Product quantity must be greater than 0" };
+    }
+
+    subtotal += Number(product.price) * quantity;
+    if (applicableProductIds.has(item.product.toString())) {
+      for (let index = 0; index < quantity; index += 1) {
+        eligibleUnits.push(Number(product.price));
+      }
+    }
+  }
+
+  if (!Number.isInteger(requiredQuantity) || requiredQuantity <= 0) {
+    return { error: "Bundle requiredQuantity must be a positive integer" };
+  }
+
+  if (!Number.isFinite(bundlePrice) || bundlePrice < 0) {
+    return { error: "Bundle price must be a valid non-negative number" };
+  }
+
+  const bundleCount = Math.floor(eligibleUnits.length / requiredQuantity);
+  if (bundleCount === 0) {
+    return { error: "Required bundle quantity not met" };
+  }
+
+  eligibleUnits.sort((first, second) => second - first);
+  const bundledUnitCount = bundleCount * requiredQuantity;
+  const bundledSubtotal = eligibleUnits
+    .slice(0, bundledUnitCount)
+    .reduce((sum, price) => sum + price, 0);
+
+  if (bundlePrice * bundleCount > bundledSubtotal) {
+    return { error: "Bundle price must not exceed the normal bundle total" };
+  }
+
+  return {
+    subtotal,
+    discountAmount: bundledSubtotal - (bundlePrice * bundleCount),
+    finalPrice: subtotal - (bundledSubtotal - (bundlePrice * bundleCount))
+  };
+};
+
 exports.createOffer = async (req, res) => {
   try {
     const {
       code,
       description,
+      type,
       discountType,
       discountValue,
+      collectionName,
+      requiredQuantity,
+      bundlePrice,
       minOrderAmount,
       maxDiscountAmount,
       applicableProducts,
@@ -44,12 +102,21 @@ exports.createOffer = async (req, res) => {
       return res.status(400).json({ message: "Offer code is required" });
     }
 
-    if (!discountType || !["percentage", "fixed"].includes(discountType)) {
+    const offerType = type || "discount";
+    if (!["discount", "bundle"].includes(offerType)) {
+      return res.status(400).json({ message: "Invalid offer type" });
+    }
+
+    if (offerType === "discount" && (!discountType || !["percentage", "fixed"].includes(discountType))) {
       return res.status(400).json({ message: "Invalid discount type" });
     }
 
-    if (discountValue === undefined || discountValue === null || Number(discountValue) < 0) {
+    if (offerType === "discount" && (discountValue === undefined || discountValue === null || Number(discountValue) < 0)) {
       return res.status(400).json({ message: "Discount value is required" });
+    }
+
+    if (offerType === "bundle" && (!Number.isInteger(Number(requiredQuantity)) || Number(requiredQuantity) <= 0 || Number(bundlePrice) < 0 || !Array.isArray(applicableProducts) || applicableProducts.length === 0)) {
+      return res.status(400).json({ message: "Bundle requires products, a positive requiredQuantity, and a valid bundlePrice" });
     }
 
     const start = startDate ? new Date(startDate) : null;
@@ -62,8 +129,12 @@ exports.createOffer = async (req, res) => {
     const offer = await Offer.create({
       code: normalizeCode(code),
       description,
-      discountType,
-      discountValue: Number(discountValue),
+      type: offerType,
+      discountType: offerType === "discount" ? discountType : undefined,
+      discountValue: offerType === "discount" ? Number(discountValue) : undefined,
+      collectionName,
+      requiredQuantity: offerType === "bundle" ? Number(requiredQuantity) : undefined,
+      bundlePrice: offerType === "bundle" ? Number(bundlePrice) : undefined,
       minOrderAmount: minOrderAmount !== undefined ? Number(minOrderAmount) : 0,
       maxDiscountAmount: maxDiscountAmount !== undefined ? Number(maxDiscountAmount) : undefined,
       applicableProducts: applicableProducts || [],
@@ -97,11 +168,21 @@ exports.getOffers = async (req, res) => {
 exports.getActiveOffers = async (req, res) => {
   try {
     const now = new Date();
-    const offers = await Offer.find({ isActive: true }).sort({ createdAt: -1 });
+    const query = { isActive: true };
+    const offers = await Offer.find(query).sort({ createdAt: -1 });
+
+    // Admin date inputs are stored at UTC midnight. Compare their calendar
+    // dates inclusively so a timezone offset does not hide the selected day.
+    const calendarDay = (date) => Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate()
+    );
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
 
     const activeOffers = offers.filter((offer) => {
-      if (offer.startDate && new Date(offer.startDate) > now) return false;
-      if (offer.endDate && new Date(offer.endDate) < now) return false;
+      if (offer.startDate && calendarDay(new Date(offer.startDate)) > today) return false;
+      if (offer.endDate && calendarDay(new Date(offer.endDate)) < today) return false;
       if (offer.usageLimit !== undefined && offer.usageLimit !== null && offer.usedCount >= offer.usageLimit) return false;
       return true;
     });
@@ -124,8 +205,20 @@ exports.updateOffer = async (req, res) => {
       req.body.code = normalizeCode(req.body.code);
     }
 
+    if (req.body.type && !["discount", "bundle"].includes(req.body.type)) {
+      return res.status(400).json({ message: "Invalid offer type" });
+    }
+
     if (req.body.discountType && !["percentage", "fixed"].includes(req.body.discountType)) {
       return res.status(400).json({ message: "Invalid discount type" });
+    }
+
+    if (req.body.type === "bundle") {
+      if (!Number.isInteger(Number(req.body.requiredQuantity)) || Number(req.body.requiredQuantity) <= 0 || Number(req.body.bundlePrice) < 0 || !Array.isArray(req.body.applicableProducts) || req.body.applicableProducts.length === 0) {
+        return res.status(400).json({ message: "Bundle requires products, a positive requiredQuantity, and a valid bundlePrice" });
+      }
+      req.body.requiredQuantity = Number(req.body.requiredQuantity);
+      req.body.bundlePrice = Number(req.body.bundlePrice);
     }
 
     if (req.body.discountValue !== undefined && (Number(req.body.discountValue) < 0 || Number.isNaN(Number(req.body.discountValue)))) {
@@ -173,13 +266,13 @@ exports.deleteOffer = async (req, res) => {
 
 exports.validateOffer = async (req, res) => {
   try {
-    const { code, totalPrice } = req.body;
+    const { code, totalPrice, products } = req.body;
 
     if (!code) {
       return res.status(400).json({ message: "Offer code is required" });
     }
 
-    if (totalPrice === undefined || totalPrice === null || Number(totalPrice) < 0) {
+    if ((totalPrice === undefined || totalPrice === null || Number(totalPrice) < 0) && !Array.isArray(products)) {
       return res.status(400).json({ message: "Valid totalPrice is required" });
     }
 
@@ -203,6 +296,34 @@ exports.validateOffer = async (req, res) => {
 
     if (offer.usageLimit !== undefined && offer.usageLimit !== null && offer.usedCount >= offer.usageLimit) {
       return res.status(400).json({ message: "Offer usage limit reached" });
+    }
+
+    if (offer.type === "bundle") {
+      if (!Array.isArray(products) || products.length === 0) {
+        return res.status(400).json({ message: "Products are required to validate a bundle offer" });
+      }
+
+      const productIds = products.map((item) => item.product);
+      const mongoProducts = await Product.find({ _id: { $in: productIds } });
+      if (mongoProducts.length !== productIds.length) {
+        return res.status(404).json({ message: "One or more products not found" });
+      }
+
+      const pricing = getBundlePricing(products, mongoProducts, offer);
+      if (pricing.error) {
+        return res.status(400).json({ message: pricing.error });
+      }
+
+      if (pricing.subtotal < Number(offer.minOrderAmount || 0)) {
+        return res.status(400).json({ message: "Minimum order amount not met" });
+      }
+
+      return res.json({
+        valid: true,
+        code: offer.code,
+        discountAmount: pricing.discountAmount,
+        finalPrice: pricing.finalPrice
+      });
     }
 
     if (Number(totalPrice) < Number(offer.minOrderAmount || 0)) {

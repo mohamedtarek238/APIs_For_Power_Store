@@ -9,15 +9,27 @@ const offerSchema = new mongoose.Schema({
     uppercase: true
   },
   description: String,
+  type: {
+    type: String,
+    enum: ["discount", "bundle"],
+    default: "discount"
+  },
   discountType: {
     type: String,
     enum: ["percentage", "fixed"],
-    required: true
+    required: function() {
+      return this.type !== "bundle";
+    }
   },
   discountValue: {
     type: Number,
-    required: true
+    required: function() {
+      return this.type !== "bundle";
+    }
   },
+  collectionName: String,
+  requiredQuantity: Number,
+  bundlePrice: Number,
   minOrderAmount: {
     type: Number,
     default: 0

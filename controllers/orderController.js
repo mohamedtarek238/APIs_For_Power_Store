@@ -22,6 +22,51 @@ const calculateDiscount = (totalPrice, offer) => {
   return discountAmount;
 };
 
+const calculateBundle = (products, productMap, offer) => {
+  const requiredQuantity = Number(offer.requiredQuantity);
+  const bundlePrice = Number(offer.bundlePrice);
+  const applicableProductIds = new Set((offer.applicableProducts || []).map((id) => id.toString()));
+  const eligibleUnits = [];
+
+  for (const item of products) {
+    if (!applicableProductIds.has(item.product.toString())) continue;
+
+    const product = productMap.get(item.product.toString());
+    const quantity = Number(item.quantity || 0);
+    for (let index = 0; index < quantity; index += 1) {
+      eligibleUnits.push(Number(product.price));
+    }
+  }
+
+  if (!Number.isInteger(requiredQuantity) || requiredQuantity <= 0) {
+    return { error: "Bundle requiredQuantity must be a positive integer" };
+  }
+
+  if (!Number.isFinite(bundlePrice) || bundlePrice < 0) {
+    return { error: "Bundle price must be a valid non-negative number" };
+  }
+
+  const bundleCount = Math.floor(eligibleUnits.length / requiredQuantity);
+  if (bundleCount === 0) {
+    return { error: "Required bundle quantity not met" };
+  }
+
+  eligibleUnits.sort((first, second) => second - first);
+  const bundledSubtotal = eligibleUnits
+    .slice(0, bundleCount * requiredQuantity)
+    .reduce((sum, price) => sum + price, 0);
+  const bundleTotal = bundlePrice * bundleCount;
+
+  if (bundleTotal > bundledSubtotal) {
+    return { error: "Bundle price must not exceed the normal bundle total" };
+  }
+
+  return {
+    discountAmount: bundledSubtotal - bundleTotal,
+    finalPrice: bundleTotal
+  };
+};
+
 exports.createOrder = async (req, res) => {
   try {
     const {
@@ -93,8 +138,18 @@ exports.createOrder = async (req, res) => {
         return res.status(400).json({ message: "Minimum order amount not met" });
       }
 
-      discountAmount = calculateDiscount(subtotal, offer);
-      finalPrice = Math.max(0, subtotal - discountAmount);
+      if (offer.type === "bundle") {
+        const bundlePricing = calculateBundle(products, productMap, offer);
+        if (bundlePricing.error) {
+          return res.status(400).json({ message: bundlePricing.error });
+        }
+
+        discountAmount = bundlePricing.discountAmount;
+        finalPrice = subtotal - discountAmount;
+      } else {
+        discountAmount = calculateDiscount(subtotal, offer);
+        finalPrice = Math.max(0, subtotal - discountAmount);
+      }
       resolvedOfferCode = offer.code;
 
       offer.usedCount += 1;
